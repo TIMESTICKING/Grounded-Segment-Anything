@@ -126,7 +126,19 @@ def save_mask_data(output_dir, mask_list, box_list, label_list):
         })
     with open(os.path.join(output_dir, 'mask.json'), 'w') as f:
         json.dump(json_data, f)
-    
+
+
+def get_input(prompts: list):
+    res = []
+    for t in prompts:
+        a = input(t)
+        if a.startswith('q/') and len(res) != 0:
+            res[-1] = a[2:].strip()
+        else:
+            res.append(a)
+
+    return res
+
 
 if __name__ == "__main__":
 
@@ -138,8 +150,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sam_checkpoint", type=str, required=True, help="path to checkpoint file"
     )
-    parser.add_argument("--input_image", type=str, required=True, help="path to image file")
-    parser.add_argument("--text_prompt", type=str, required=True, help="text prompt")
+    # parser.add_argument("--input_image", type=str, required=True, help="path to image file")
+    # parser.add_argument("--text_prompt", type=str, required=True, help="text prompt")
     parser.add_argument(
         "--output_dir", "-o", type=str, default="outputs", required=True, help="output directory"
     )
@@ -154,64 +166,73 @@ if __name__ == "__main__":
     config_file = args.config  # change the path of the model config file
     grounded_checkpoint = args.grounded_checkpoint  # change the path of the model
     sam_checkpoint = args.sam_checkpoint
-    image_path = args.input_image
-    text_prompt = args.text_prompt
+    # image_path = args.input_image
+    # text_prompt = args.text_prompt
     output_dir = args.output_dir
-    box_threshold = args.box_threshold
-    text_threshold = args.box_threshold
+    global_box_threshold = args.box_threshold
+    global_text_threshold = args.box_threshold
     device = args.device
 
     # make dir
     os.makedirs(output_dir, exist_ok=True)
-    # load image
-    image_pil, image = load_image(image_path)
     # load model
     model = load_model(config_file, grounded_checkpoint, device=device)
 
-    # visualize raw image
-    image_pil.save(os.path.join(output_dir, "raw_image.jpg"))
-
-    # run grounding dino model
-    boxes_filt, pred_phrases = get_grounding_output(
-        model, image, text_prompt, box_threshold, text_threshold, device=device
-    )
-
     # initialize SAM
     predictor = SamPredictor(build_sam(checkpoint=sam_checkpoint))
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    predictor.set_image(image)
 
-    size = image_pil.size
-    H, W = size[1], size[0]
-    for i in range(boxes_filt.size(0)):
-        boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
-        boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
-        boxes_filt[i][2:] += boxes_filt[i][:2]
+    while True:
+        image_path, text_prompt, box_threshold, text_threshold = get_input([
+            'image_path: ', 'text_prompt: ', 'box_threshold: ', 'text_threshold: '
+        ])
+        box_threshold = global_box_threshold if box_threshold == '' else float(box_threshold)
+        text_threshold = global_text_threshold if text_threshold == '' else float(text_threshold)
+        
+        # load image
+        image_pil, image = load_image(image_path)
 
-    boxes_filt = boxes_filt.cpu()
-    transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2])
+        # visualize raw image
+        image_pil.save(os.path.join(output_dir, "raw_image.jpg"))
 
-    masks, _, _ = predictor.predict_torch(
-        point_coords = None,
-        point_labels = None,
-        boxes = transformed_boxes,
-        multimask_output = False,
-    )
-    
-    # draw output image
-    plt.figure(figsize=(10, 10))
-    plt.imshow(image)
-    for mask in masks:
-        show_mask(mask.cpu().numpy(), plt.gca(), random_color=True)
-    for box, label in zip(boxes_filt, pred_phrases):
-        show_box(box.numpy(), plt.gca(), label)
+        # run grounding dino model
+        boxes_filt, pred_phrases = get_grounding_output(
+            model, image, text_prompt, box_threshold, text_threshold, device=device
+        )
 
-    plt.axis('off')
-    plt.savefig(
-        os.path.join(output_dir, "grounded_sam_output.jpg"), 
-        bbox_inches="tight", dpi=300, pad_inches=0.0
-    )
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        predictor.set_image(image)
 
-    save_mask_data(output_dir, masks, boxes_filt, pred_phrases)
+        size = image_pil.size
+        H, W = size[1], size[0]
+        for i in range(boxes_filt.size(0)):
+            boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
+            boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
+            boxes_filt[i][2:] += boxes_filt[i][:2]
+
+        boxes_filt = boxes_filt.cpu()
+        transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2])
+
+        masks, _, _ = predictor.predict_torch(
+            point_coords = None,
+            point_labels = None,
+            boxes = transformed_boxes,
+            multimask_output = False,
+        )
+        
+        # draw output image
+        plt.figure(figsize=(10, 10))
+        plt.imshow(image)
+        for mask in masks:
+            show_mask(mask.cpu().numpy(), plt.gca(), random_color=True)
+        for box, label in zip(boxes_filt, pred_phrases):
+            show_box(box.numpy(), plt.gca(), label)
+
+        plt.axis('off')
+        plt.savefig(
+            os.path.join(output_dir, "grounded_sam_output.jpg"), 
+            bbox_inches="tight", dpi=300, pad_inches=0.0
+        )
+
+        save_mask_data(output_dir, masks, boxes_filt, pred_phrases)
 
